@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Telegram Last Seen Checker</title>
+<style>
+:root{--bg:#f3f6f8;--card:#fff;--ink:#14212b;--mute:#5d6b76;--line:#d9e1e7;--brand:#1f6f9f;
+--online:#1b8a4b;--recently:#2f7fc1;--week:#b7791f;--month:#c2570c;--long:#8a8f95;--bot:#6b46c1;--bad:#b42318}
+@media(prefers-color-scheme:dark){:root{--bg:#0f161c;--card:#17222b;--ink:#e6edf2;--mute:#93a3af;--line:#2a3a46;--brand:#5aa9d6}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 "Segoe UI",system-ui,sans-serif}
+main{max-width:980px;margin:0 auto;padding:24px 16px 64px}
+h1{font-size:1.5rem;margin:0 0 4px}
+p.sub{color:var(--mute);margin:0 0 20px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px;margin-bottom:16px}
+h2{font-size:1.05rem;margin:0 0 12px}
+label{display:block;font-size:.9rem;color:var(--mute);margin:10px 0 4px}
+input,textarea{width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink);font:inherit}
+textarea{min-height:160px;font-family:ui-monospace,Consolas,monospace;font-size:.9rem}
+button{padding:10px 18px;border:0;border-radius:8px;background:var(--brand);color:#fff;font:inherit;cursor:pointer;margin-top:12px}
+button.ghost{background:transparent;color:var(--brand);border:1px solid var(--brand)}
+button:disabled{opacity:.5;cursor:not-allowed}
+button:focus-visible,input:focus-visible,textarea:focus-visible{outline:3px solid var(--brand);outline-offset:2px}
+.row{display:flex;gap:12px;flex-wrap:wrap;align-items:end}.row>*{flex:1;min-width:160px}
+.hidden{display:none}
+.msg{margin-top:10px;font-size:.92rem}.err{color:var(--bad)}
+.bar{height:8px;background:var(--line);border-radius:4px;overflow:hidden;margin:12px 0}
+.bar i{display:block;height:100%;width:0;background:var(--brand);transition:width .3s}
+.chips{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
+.chip{border:1px solid var(--line);border-radius:20px;padding:4px 12px;font-size:.88rem;cursor:pointer;background:transparent;color:var(--ink);margin:0}
+.chip.on{background:var(--brand);color:#fff;border-color:var(--brand)}
+.tw{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:.93rem}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+.tag{font-weight:600}
+.online{color:var(--online)}.recently{color:var(--recently)}.week{color:var(--week)}.month{color:var(--month)}.long{color:var(--long)}.bot{color:var(--bot)}.error{color:var(--bad)}
+.top{display:flex;justify-content:space-between;align-items:start;gap:12px}
+</style>
+</head>
+<body>
+<main>
+<div class="top"><div><h1>Telegram Last Seen Checker</h1>
+<p class="sub">Paste usernames or phone numbers, get Online / Recently / Week / Month / Long ago.</p></div>
+<button class="ghost hidden" id="logoutBtn">Log out</button></div>
+
+<section class="card hidden" id="stepConfig">
+<h2>1. API keys</h2>
+<p class="sub">Get them from <b>my.telegram.org</b> → API development tools.</p>
+<label for="apiId">API ID</label><input id="apiId" inputmode="numeric">
+<label for="apiHash">API Hash</label><input id="apiHash">
+<button id="saveCfg">Save keys</button><div class="msg err" id="cfgMsg"></div>
+</section>
+
+<section class="card hidden" id="stepLogin">
+<h2>2. Telegram login</h2>
+<div id="phoneBox"><label for="phone">Phone number (with country code, e.g. +92300...)</label>
+<input id="phone"><button id="sendCode">Send code</button></div>
+<div id="codeBox" class="hidden"><label for="code">Code received in Telegram</label><input id="code" inputmode="numeric">
+<div id="pwBox" class="hidden"><label for="pw">2-step verification password</label><input id="pw" type="password"></div>
+<button id="verify">Log in</button></div>
+<div class="msg err" id="loginMsg"></div>
+</section>
+
+<section class="card hidden" id="stepCheck">
+<h2>Check list</h2>
+<label for="list">One per line: @username, t.me/username, or +923001234567 (max 500)</label>
+<textarea id="list" placeholder="@example_user&#10;+923001234567"></textarea>
+<div class="row"><div><label for="delay">Delay between checks (seconds, min 1)</label><input id="delay" type="number" value="2" min="1" step="0.5"></div>
+<div><button id="start">Start check</button> <button class="ghost hidden" id="stop">Stop</button></div></div>
+<div class="msg err" id="checkMsg"></div>
+</section>
+
+<section class="card hidden" id="stepResults">
+<h2>Results <span id="progTxt" class="sub"></span></h2>
+<div class="bar"><i id="prog"></i></div>
+<div class="chips" id="chips"></div>
+<button class="ghost" id="csv">Download CSV</button>
+<div class="tw"><table><thead><tr><th>Input</th><th>Name</th><th>Username</th><th>Status</th><th>Detail</th></tr></thead><tbody id="rows"></tbody></table></div>
+</section>
+</main>
+
+<script>
+const $=id=>document.getElementById(id);
+const api=(u,b)=>fetch(u,{method:b?'POST':'GET',headers:{'Content-Type':'application/json'},body:b?JSON.stringify(b):undefined}).then(r=>r.json());
+const NAMES={online:'Online',recently:'Recently',week:'Within a week',month:'Within a month',long:'Long time ago',bot:'Bot',error:'Error'};
+let results=[],filter='all',jobId=null,timer=null;
+
+function show(s){for(const k of ['stepConfig','stepLogin','stepCheck'])$(k).classList.toggle('hidden',k!==s);
+ $('logoutBtn').classList.toggle('hidden',s!=='stepCheck');}
+async function init(){const s=await api('/api/state');
+ show(!s.has_config?'stepConfig':!s.authorized?'stepLogin':'stepCheck');}
+
+$('saveCfg').onclick=async()=>{await api('/api/config',{api_id:$('apiId').value,api_hash:$('apiHash').value});init();};
+$('sendCode').onclick=async()=>{$('loginMsg').textContent='';
+ const r=await api('/api/send_code',{phone:$('phone').value});
+ if(r.ok){$('phoneBox').classList.add('hidden');$('codeBox').classList.remove('hidden');}else $('loginMsg').textContent=r.error;};
+$('verify').onclick=async()=>{$('loginMsg').textContent='';
+ const r=await api('/api/verify',{code:$('code').value,password:$('pw').value});
+ if(r.ok)init();else if(r.need_password){$('pwBox').classList.remove('hidden');$('loginMsg').textContent='Enter your 2-step password and press Log in again.';}
+ else $('loginMsg').textContent=r.error||'Login failed';};
+$('logoutBtn').onclick=async()=>{await api('/api/logout',{});location.reload();};
+
+$('start').onclick=async()=>{
+ const items=$('list').value.split('\n').map(s=>s.trim()).filter(Boolean);
+ if(!items.length){$('checkMsg').textContent='Add at least one username or number.';return;}
+ $('checkMsg').textContent='';results=[];render();
+ const r=await api('/api/check',{items,delay:$('delay').value});
+ if(!r.ok){$('checkMsg').textContent=r.error;return;}
+ jobId=r.job;$('stepResults').classList.remove('hidden');$('start').disabled=true;$('stop').classList.remove('hidden');
+ timer=setInterval(poll,1500);poll();};
+$('stop').onclick=()=>api('/api/cancel/'+jobId,{});
+
+async function poll(){const j=await api('/api/job/'+jobId);
+ results=j.results;$('prog').style.width=(j.done/j.total*100)+'%';$('progTxt').textContent=`${j.done} / ${j.total}`;render();
+ if(j.finished){clearInterval(timer);$('start').disabled=false;$('stop').classList.add('hidden');
+  if(j.error)$('checkMsg').textContent=j.error;}}
+
+function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+function render(){
+ const counts={};results.forEach(r=>counts[r.bucket]=(counts[r.bucket]||0)+1);
+ $('chips').innerHTML=['all',...Object.keys(NAMES)].filter(k=>k==='all'||counts[k]).map(k=>
+  `<button class="chip ${filter===k?'on':''}" data-k="${k}">${k==='all'?'All':NAMES[k]} (${k==='all'?results.length:counts[k]})</button>`).join('');
+ document.querySelectorAll('.chip').forEach(b=>b.onclick=()=>{filter=b.dataset.k;render();});
+ $('rows').innerHTML=results.filter(r=>filter==='all'||r.bucket===filter).map(r=>
+  `<tr><td>${esc(r.input)}</td><td>${esc(r.name)}</td><td>${r.username?'@'+esc(r.username):''}</td>
+  <td class="tag ${r.bucket}">${NAMES[r.bucket]||r.bucket}</td><td>${esc(r.label)}</td></tr>`).join('');}
+
+$('csv').onclick=()=>{const q=v=>'"'+String(v).replace(/"/g,'""')+'"';
+ const lines=[['Input','Name','Username','Status','Detail'].map(q).join(',')];
+ results.forEach(r=>lines.push([r.input,r.name,r.username,NAMES[r.bucket]||r.bucket,r.label].map(q).join(',')));
+ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\ufeff'+lines.join('\n')],{type:'text/csv'}));
+ a.download='telegram_last_seen.csv';a.click();};
+init();
+</script>
+</body>
+</html>
